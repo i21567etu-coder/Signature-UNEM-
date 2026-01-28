@@ -61,7 +61,7 @@
             box-shadow: 0 6px 20px rgba(0, 100, 0, 0.4);
         }
         
-        #pdfInput { display: none; }
+        #fileInput { display: none; }
         
         .download-btn {
             display: none;
@@ -125,13 +125,14 @@
     <div class="container">
         <img src="logo.png" class="site-logo" alt="شعار الاتحاد" onerror="this.style.display='none'">
         <h1>توقيع المستندات إلكترونياً</h1>
-        <p>يدعم الآن جميع أنواع الملفات بما فيها الصور الممسوحة ضوئياً.<br>الاتحاد الوطني لطلبة موريتانيا</p>
+        <p>يدعم ملفات PDF والصور (JPG, PNG).<br>يتم تحويل الصور إلى PDF وتوقيعها تلقائياً.</p>
 
-        <label for="pdfInput" class="upload-btn">
-            <span>📄</span>
-            <span>اضغط هنا لاختيار ملف PDF</span>
+        <!-- تم تحديث قبول الملفات ليشمل الصور -->
+        <label for="fileInput" class="upload-btn">
+            <span>📂</span>
+            <span>اضغط هنا لاختيار ملف (PDF أو صورة)</span>
         </label>
-        <input type="file" id="pdfInput" accept="application/pdf" onchange="processPDF()">
+        <input type="file" id="fileInput" accept="application/pdf, image/png, image/jpeg, image/jpg" onchange="processFile()">
 
         <div id="status-msg" class="status"></div>
 
@@ -147,8 +148,8 @@
     </footer>
 
     <script>
-        async function processPDF() {
-            const fileInput = document.getElementById('pdfInput');
+        async function processFile() {
+            const fileInput = document.getElementById('fileInput');
             const statusMsg = document.getElementById('status-msg');
             const downloadLink = document.getElementById('download-link');
             const file = fileInput.files[0];
@@ -156,76 +157,99 @@
             if (!file) return;
 
             downloadLink.style.display = 'none';
-            statusMsg.innerText = "⏳ جاري المعالجة ووضع الختم...";
+            statusMsg.innerText = "⏳ جاري المعالجة وتحويل الملف...";
             statusMsg.className = "status loading";
 
             try {
-                // جلب الشعار
+                // 1. جلب الشعار
                 const logoResponse = await fetch('logo.png');
                 if (!logoResponse.ok) throw new Error("لم يتم العثور على logo.png");
                 const logoImageBytes = await logoResponse.arrayBuffer();
 
-                const pdfBytes = await file.arrayBuffer();
-                const { PDFDocument, rgb } = PDFLib;
-                const pdfDoc = await PDFDocument.load(pdfBytes);
+                const { PDFDocument } = PDFLib;
+                let pdfDoc;
 
-                // دمج الصورة
-                let logoImage;
-                try {
-                    logoImage = await pdfDoc.embedPng(logoImageBytes);
-                } catch (e) {
-                    logoImage = await pdfDoc.embedJpg(logoImageBytes);
+                // 2. التحقق من نوع الملف (صورة أم PDF)
+                if (file.type.startsWith('image/')) {
+                    // === مسار معالجة الصور ===
+                    pdfDoc = await PDFDocument.create();
+                    const imageBytes = await file.arrayBuffer();
+                    let embeddedImage;
+
+                    // دمج الصورة بناءً على نوعها
+                    if (file.type === 'image/png') {
+                        embeddedImage = await pdfDoc.embedPng(imageBytes);
+                    } else {
+                        embeddedImage = await pdfDoc.embedJpg(imageBytes);
+                    }
+
+                    // إنشاء صفحة بحجم الصورة
+                    const page = pdfDoc.addPage([embeddedImage.width, embeddedImage.height]);
+                    
+                    // رسم الصورة لتملأ الصفحة
+                    page.drawImage(embeddedImage, {
+                        x: 0,
+                        y: 0,
+                        width: embeddedImage.width,
+                        height: embeddedImage.height,
+                    });
+
+                } else {
+                    // === مسار معالجة PDF ===
+                    const pdfBytes = await file.arrayBuffer();
+                    pdfDoc = await PDFDocument.load(pdfBytes);
                 }
 
+                // 3. تحضير صورة الشعار للدمج (الختم)
+                let stampImage;
+                try {
+                    stampImage = await pdfDoc.embedPng(logoImageBytes);
+                } catch (e) {
+                    stampImage = await pdfDoc.embedJpg(logoImageBytes);
+                }
+
+                // 4. تطبيق الأختام على جميع الصفحات
                 const pages = pdfDoc.getPages();
-                
-                // إعدادات الختم
                 for (const page of pages) {
                     const { width, height } = page.getSize();
                     
-                    // -----------------------------------------------------
-                    // 1. الختم المائي في الوسط (Watermark)
-                    // -----------------------------------------------------
-                    const centerScale = 0.5; // حجم الختم في الوسط
-                    const centerDims = logoImage.scale(centerScale);
-                    
-                    page.drawImage(logoImage, {
+                    // أ. الختم المائي (الوسط - شفاف)
+                    const centerScale = 0.5;
+                    const centerDims = stampImage.scale(centerScale);
+                    page.drawImage(stampImage, {
                         x: (width - centerDims.width) / 2,
                         y: (height - centerDims.height) / 2,
                         width: centerDims.width,
                         height: centerDims.height,
-                        // رفعنا الشفافية هنا لتظهر فوق الصور الرمادية
-                        opacity: 0.3, 
+                        opacity: 0.3,
                     });
 
-                    // -----------------------------------------------------
-                    // 2. ختم التوثيق في الزاوية العلوية (Stamp) - هام جداً للصور
-                    // -----------------------------------------------------
-                    // هذا الختم يكون صغيراً وواضحاً جداً (بدون شفافية تقريباً)
-                    // ليظهر بوضوح حتى لو كان الملف عبارة عن صورة سكانر
-                    
-                    const stampScale = 0.15; // حجم أصغر للزاوية
-                    const stampDims = logoImage.scale(stampScale);
-                    const margin = 20; // المسافة من الحافة
+                    // ب. ختم التوثيق (الزاوية - واضح)
+                    const stampScale = 0.15;
+                    const stampDims = stampImage.scale(stampScale);
+                    const margin = 20;
 
-                    page.drawImage(logoImage, {
-                        x: margin, // في الزاوية اليسرى
-                        y: height - stampDims.height - margin, // في الأعلى
+                    page.drawImage(stampImage, {
+                        x: margin,
+                        y: height - stampDims.height - margin,
                         width: stampDims.width,
                         height: stampDims.height,
-                        opacity: 0.9, // شبه معتم ليظهر بوضوح تام فوق أي خلفية
+                        opacity: 0.9,
                     });
                 }
 
+                // 5. الحفظ والتنزيل
                 const modifiedPdfBytes = await pdfDoc.save();
                 const blob = new Blob([modifiedPdfBytes], { type: 'application/pdf' });
                 const blobUrl = URL.createObjectURL(blob);
 
                 downloadLink.href = blobUrl;
-                downloadLink.download = file.name.replace('.pdf', '_signed.pdf');
-                downloadLink.style.display = 'inline-block';
+                // إذا كان الملف الأصلي صورة، نجعل الاسم ينتهي بـ .pdf
+                const newFileName = file.name.replace(/\.[^/.]+$/, "") + "_signed.pdf";
+                downloadLink.download = newFileName;
                 
-                statusMsg.innerText = "✅ تم التوقيع بنجاح!";
+                downloadLink.style.display = 'inline-block';
+                statusMsg.innerText = "✅ تم التحويل والتوقيع بنجاح!";
                 statusMsg.className = "status success";
 
             } catch (err) {
