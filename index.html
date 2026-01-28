@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>منصة توقيع الملفات - الاتحاد الوطني لطلبة موريتانيا</title>
+    <!-- استدعاء مكتبة معالجة ملفات PDF -->
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    <!-- استدعاء خط جميل -->
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f7f6;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            width: 90%;
+            max-width: 800px;
+            text-align: center;
+        }
+        h1 { color: #006400; margin-bottom: 20px; }
+        .logo-header { width: 80px; margin-bottom: 10px; }
+        
+        .upload-btn-wrapper {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+            margin: 20px 0;
+        }
+        
+        .btn {
+            border: 2px solid #006400;
+            color: #006400;
+            background-color: white;
+            padding: 8px 20px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        
+        .btn:hover { background-color: #006400; color: white; }
+        
+        .upload-btn-wrapper input[type=file] {
+            font-size: 100px;
+            position: absolute;
+            left: 0;
+            top: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        #preview-container {
+            display: none; /* مخفي حتى يتم المعالجة */
+            margin-top: 20px;
+            width: 100%;
+            height: 500px;
+            border: 1px solid #ddd;
+        }
+
+        iframe { width: 100%; height: 100%; border: none; }
+
+        #download-btn {
+            display: none;
+            margin-top: 20px;
+            background-color: #006400;
+            color: white;
+            padding: 12px 30px;
+            text-decoration: none;
+            border-radius: 5px;
+            font-size: 18px;
+        }
+        #download-btn:hover { background-color: #004d00; }
+
+        .loader {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #006400;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            display: none;
+            margin: 10px auto;
+        }
+
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <!-- عرض الشعار في الأعلى كعنوان -->
+        <img src="logo.png" alt="UNEM Logo" class="logo-header">
+        <h1>توقيع المستندات إلكترونياً</h1>
+        <p>قم برفع ملف PDF ليتم وضع ختم الاتحاد عليه تلقائياً.</p>
+
+        <div class="upload-btn-wrapper">
+            <button class="btn">اختر ملف PDF</button>
+            <input type="file" id="uploadInput" accept="application/pdf" onchange="processPDF()">
+        </div>
+
+        <div class="loader" id="loader"></div>
+        <p id="status-text"></p>
+
+        <!-- منطقة المعاينة -->
+        <div id="preview-container">
+            <iframe id="pdf-preview"></iframe>
+        </div>
+
+        <!-- زر التحميل -->
+        <a id="download-btn" href="#" download="document_signed.pdf">تنزيل الملف الموقع</a>
+    </div>
+
+    <script>
+        // دالة المعالجة الرئيسية
+        async function processPDF() {
+            const fileInput = document.getElementById('uploadInput');
+            const file = fileInput.files[0];
+            
+            if (!file) return;
+
+            // إظهار التحميل
+            document.getElementById('loader').style.display = 'block';
+            document.getElementById('status-text').innerText = "جاري معالجة الملف ووضع الختم...";
+            document.getElementById('preview-container').style.display = 'none';
+            document.getElementById('download-btn').style.display = 'none';
+
+            try {
+                // 1. قراءة ملف PDF المرفوع
+                const existingPdfBytes = await file.arrayBuffer();
+
+                // 2. تحميل مكتبة PDFLib
+                const { PDFDocument } = PDFLib;
+
+                // 3. تحميل مستند PDF
+                const pdfDoc = await PDFDocument.load(existingPdfBytes);
+
+                // 4. جلب صورة الشعار (يجب أن تكون بجانب الملف باسم logo.png)
+                // نستخدم fetch لجلب الصورة من السيرفر المحلي أو المجلد
+                const logoUrl = 'logo.png';
+                const logoImageBytes = await fetch(logoUrl).then(res => res.arrayBuffer());
+
+                // 5. دمج الصورة داخل الـ PDF
+                // نحدد نوع الصورة (png أو jpg)
+                let logoImage;
+                if (logoUrl.endsWith('.png')) {
+                    logoImage = await pdfDoc.embedPng(logoImageBytes);
+                } else {
+                    logoImage = await pdfDoc.embedJpg(logoImageBytes);
+                }
+
+                // 6. الحصول على أبعاد الصورة (يمكنك تكبيرها أو تصغيرها من هنا)
+                const logoDims = logoImage.scale(0.5); // تصغير الصورة إلى 50%
+
+                // 7. تكرار العملية على كل صفحات الملف
+                const pages = pdfDoc.getPages();
+                for (const page of pages) {
+                    const { width, height } = page.getSize();
+                    
+                    // حساب المركز لوضع الصورة في الوسط
+                    const x = (width - logoDims.width) / 2;
+                    const y = (height - logoDims.height) / 2;
+
+                    // رسم الصورة
+                    page.drawImage(logoImage, {
+                        x: x,
+                        y: y,
+                        width: logoDims.width,
+                        height: logoDims.height,
+                        opacity: 0.15, // الشفافية: 0.15 تعني خفيفة جداً (تحت الكتابة)
+                    });
+                }
+
+                // 8. حفظ الملف الجديد
+                const pdfBytes = await pdfDoc.save();
+
+                // 9. إنشاء رابط للعرض والتحميل
+                const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                const blobUrl = URL.createObjectURL(blob);
+
+                // عرض المعاينة
+                const iframe = document.getElementById('pdf-preview');
+                iframe.src = blobUrl;
+                document.getElementById('preview-container').style.display = 'block';
+
+                // تجهيز زر التحميل
+                const downloadBtn = document.getElementById('download-btn');
+                downloadBtn.href = blobUrl;
+                downloadBtn.download = file.name.replace('.pdf', '_signed.pdf'); // اسم الملف الجديد
+                downloadBtn.style.display = 'inline-block';
+
+                document.getElementById('status-text').innerText = "تم توقيع الملف بنجاح!";
+
+            } catch (error) {
+                console.error(error);
+                document.getElementById('status-text').innerText = "حدث خطأ! تأكد من وجود ملف logo.png في نفس المجلد.";
+                alert("تنبيه: يجب أن تكون صورة logo.png موجودة بجانب ملف html ليعمل الكود.");
+            } finally {
+                document.getElementById('loader').style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>
