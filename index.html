@@ -125,9 +125,8 @@
     <div class="container">
         <img src="logo.png" class="site-logo" alt="شعار الاتحاد" onerror="this.style.display='none'">
         <h1>توقيع المستندات إلكترونياً</h1>
-        <p>يدعم ملفات PDF والصور (JPG, PNG).<br>يتم تحويل الصور إلى PDF وتوقيعها تلقائياً.</p>
+        <p>يدعم ملفات PDF والصور (JPG, PNG).<br>سيتم دمج التوقيع بشفافية لضمان قراءة النص.</p>
 
-        <!-- تم تحديث قبول الملفات ليشمل الصور -->
         <label for="fileInput" class="upload-btn">
             <span>📂</span>
             <span>اضغط هنا لاختيار ملف (PDF أو صورة)</span>
@@ -171,22 +170,18 @@
 
                 // 2. التحقق من نوع الملف (صورة أم PDF)
                 if (file.type.startsWith('image/')) {
-                    // === مسار معالجة الصور ===
                     pdfDoc = await PDFDocument.create();
                     const imageBytes = await file.arrayBuffer();
                     let embeddedImage;
 
-                    // دمج الصورة بناءً على نوعها
                     if (file.type === 'image/png') {
                         embeddedImage = await pdfDoc.embedPng(imageBytes);
                     } else {
                         embeddedImage = await pdfDoc.embedJpg(imageBytes);
                     }
 
-                    // إنشاء صفحة بحجم الصورة
                     const page = pdfDoc.addPage([embeddedImage.width, embeddedImage.height]);
                     
-                    // رسم الصورة لتملأ الصفحة
                     page.drawImage(embeddedImage, {
                         x: 0,
                         y: 0,
@@ -195,12 +190,11 @@
                     });
 
                 } else {
-                    // === مسار معالجة PDF ===
                     const pdfBytes = await file.arrayBuffer();
                     pdfDoc = await PDFDocument.load(pdfBytes);
                 }
 
-                // 3. تحضير صورة الشعار للدمج (الختم)
+                // 3. تحضير صورة الشعار
                 let stampImage;
                 try {
                     stampImage = await pdfDoc.embedPng(logoImageBytes);
@@ -208,12 +202,12 @@
                     stampImage = await pdfDoc.embedJpg(logoImageBytes);
                 }
 
-                // 4. تطبيق الأختام على جميع الصفحات
+                // 4. تطبيق الأختام
                 const pages = pdfDoc.getPages();
                 for (const page of pages) {
                     const { width, height } = page.getSize();
                     
-                    // أ. الختم المائي (الوسط - شفاف)
+                    // أ. الختم المائي (الوسط - كبير وواضح ومقروء ما تحته)
                     const centerScale = 0.5;
                     const centerDims = stampImage.scale(centerScale);
                     page.drawImage(stampImage, {
@@ -221,20 +215,20 @@
                         y: (height - centerDims.height) / 2,
                         width: centerDims.width,
                         height: centerDims.height,
-                        opacity: 0.3,
+                        opacity: 0.4, // زيادة الوضوح قليلاً مع الحفاظ على الشفافية
                     });
 
-                    // ب. ختم التوثيق (الزاوية - واضح)
+                    // ب. ختم التوثيق (أسفل اليسار - شفاف ليظهر النص تحته)
                     const stampScale = 0.15;
                     const stampDims = stampImage.scale(stampScale);
                     const margin = 20;
 
                     page.drawImage(stampImage, {
-                        x: margin,
-                        y: height - stampDims.height - margin,
+                        x: margin, // في الزاوية اليسرى
+                        y: margin, // في الأسفل (عادة أفرغ من الأعلى)
                         width: stampDims.width,
                         height: stampDims.height,
-                        opacity: 0.9,
+                        opacity: 0.75, // شفافية تسمح بقراءة النص الأسود من تحت الختم
                     });
                 }
 
@@ -244,7 +238,6 @@
                 const blobUrl = URL.createObjectURL(blob);
 
                 downloadLink.href = blobUrl;
-                // إذا كان الملف الأصلي صورة، نجعل الاسم ينتهي بـ .pdf
                 const newFileName = file.name.replace(/\.[^/.]+$/, "") + "_signed.pdf";
                 downloadLink.download = newFileName;
                 
