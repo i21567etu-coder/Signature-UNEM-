@@ -63,20 +63,27 @@
         
         #fileInput { display: none; }
         
-        .download-btn {
-            display: none;
+        #downloads-container {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
             margin-top: 25px;
+            width: 100%;
+        }
+
+        .download-btn {
             background: linear-gradient(135deg, #d32f2f, #b71c1c);
             color: white;
-            padding: 15px 30px;
+            padding: 15px 20px;
             text-decoration: none;
-            border-radius: 50px;
-            font-size: 16px;
+            border-radius: 15px;
+            font-size: 15px;
             font-weight: bold;
             width: 100%;
             box-sizing: border-box;
             transition: all 0.3s ease;
             box-shadow: 0 4px 15px rgba(211, 47, 47, 0.3);
+            display: block;
         }
         .download-btn:hover { 
             transform: translateY(-2px); 
@@ -125,19 +132,19 @@
     <div class="container">
         <img src="logo.png" class="site-logo" alt="شعار الاتحاد" onerror="this.style.display='none'">
         <h1>توقيع المستندات إلكترونياً</h1>
-        <p>يدعم ملفات PDF والصور (JPG, PNG).<br>سيتم دمج التوقيع بشفافية لضمان قراءة النص.</p>
+        <p>يدعم ملفات PDF والصور (JPG, PNG).<br>يمكنك اختيار ملف واحد أو <b>عدة ملفات في نفس الوقت</b>.</p>
 
+        <!-- تمت إضافة خاصية multiple هنا لتمكين اختيار عدة ملفات -->
         <label for="fileInput" class="upload-btn">
             <span>📂</span>
-            <span>اضغط هنا لاختيار ملف (PDF أو صورة)</span>
+            <span>اضغط هنا لاختيار ملف أو أكثر</span>
         </label>
-        <input type="file" id="fileInput" accept="application/pdf, image/png, image/jpeg, image/jpg" onchange="processFile()">
+        <input type="file" id="fileInput" accept="application/pdf, image/png, image/jpeg, image/jpg" multiple onchange="processFiles()">
 
         <div id="status-msg" class="status"></div>
 
-        <a id="download-link" class="download-btn" href="#" download>
-            📥 اضغط هنا لتنزيل الملف الموقع
-        </a>
+        <!-- حاوية الروابط لملفات متعددة -->
+        <div id="downloads-container"></div>
     </div>
 
     <footer>
@@ -147,101 +154,101 @@
     </footer>
 
     <script>
-        async function processFile() {
+        async function processFiles() {
             const fileInput = document.getElementById('fileInput');
             const statusMsg = document.getElementById('status-msg');
-            const downloadLink = document.getElementById('download-link');
-            const file = fileInput.files[0];
+            const downloadsContainer = document.getElementById('downloads-container');
+            const files = fileInput.files;
 
-            if (!file) return;
+            if (files.length === 0) return;
 
-            downloadLink.style.display = 'none';
-            statusMsg.innerText = "⏳ جاري المعالجة وتحويل الملف...";
+            // تصفير حاوية التحميل وإظهار حالة التحميل
+            downloadsContainer.innerHTML = '';
+            statusMsg.innerText = "⏳ جاري المعالجة وتحويل الملفات...";
             statusMsg.className = "status loading";
 
             try {
-                // 1. جلب الشعار
+                // 1. جلب الشعار مرة واحدة لاستخدامه مع جميع الملفات
                 const logoResponse = await fetch('logo.png');
                 if (!logoResponse.ok) throw new Error("لم يتم العثور على logo.png");
                 const logoImageBytes = await logoResponse.arrayBuffer();
-
                 const { PDFDocument } = PDFLib;
-                let pdfDoc;
 
-                // 2. التحقق من نوع الملف (صورة أم PDF)
-                if (file.type.startsWith('image/')) {
-                    pdfDoc = await PDFDocument.create();
-                    const imageBytes = await file.arrayBuffer();
-                    let embeddedImage;
+                // 2. المرور على كل ملف ومعالجته
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    let pdfDoc;
 
-                    if (file.type === 'image/png') {
-                        embeddedImage = await pdfDoc.embedPng(imageBytes);
+                    // التحقق من نوع الملف (صورة أم PDF)
+                    if (file.type.startsWith('image/')) {
+                        pdfDoc = await PDFDocument.create();
+                        const imageBytes = await file.arrayBuffer();
+                        let embeddedImage;
+
+                        if (file.type === 'image/png') {
+                            embeddedImage = await pdfDoc.embedPng(imageBytes);
+                        } else {
+                            embeddedImage = await pdfDoc.embedJpg(imageBytes);
+                        }
+
+                        const page = pdfDoc.addPage([embeddedImage.width, embeddedImage.height]);
+                        
+                        page.drawImage(embeddedImage, {
+                            x: 0,
+                            y: 0,
+                            width: embeddedImage.width,
+                            height: embeddedImage.height,
+                        });
+
                     } else {
-                        embeddedImage = await pdfDoc.embedJpg(imageBytes);
+                        const pdfBytes = await file.arrayBuffer();
+                        pdfDoc = await PDFDocument.load(pdfBytes);
                     }
 
-                    const page = pdfDoc.addPage([embeddedImage.width, embeddedImage.height]);
+                    // تحضير صورة الشعار
+                    let stampImage;
+                    try {
+                        stampImage = await pdfDoc.embedPng(logoImageBytes);
+                    } catch (e) {
+                        stampImage = await pdfDoc.embedJpg(logoImageBytes);
+                    }
+
+                    // تطبيق الختم
+                    const pages = pdfDoc.getPages();
+                    for (const page of pages) {
+                        const { width, height } = page.getSize();
+                        
+                        // الختم المائي (الوسط - كبير، شفاف، ويسمح بقراءة النص)
+                        const centerScale = 0.5;
+                        const centerDims = stampImage.scale(centerScale);
+                        page.drawImage(stampImage, {
+                            x: (width - centerDims.width) / 2,
+                            y: (height - centerDims.height) / 2,
+                            width: centerDims.width,
+                            height: centerDims.height,
+                            opacity: 0.3, // قيمة ممتازة لتكون الصورة شفافة والنص تحتها مقروءاً
+                        });
+                        
+                        // ملاحظة: تم إزالة الختم الصغير الجانبي بناءً على طلبك
+                    }
+
+                    // الحفظ والتنزيل لكل ملف
+                    const modifiedPdfBytes = await pdfDoc.save();
+                    const blob = new Blob([modifiedPdfBytes], { type: 'application/pdf' });
+                    const blobUrl = URL.createObjectURL(blob);
+
+                    const newFileName = file.name.replace(/\.[^/.]+$/, "") + "_signed.pdf";
                     
-                    page.drawImage(embeddedImage, {
-                        x: 0,
-                        y: 0,
-                        width: embeddedImage.width,
-                        height: embeddedImage.height,
-                    });
-
-                } else {
-                    const pdfBytes = await file.arrayBuffer();
-                    pdfDoc = await PDFDocument.load(pdfBytes);
-                }
-
-                // 3. تحضير صورة الشعار
-                let stampImage;
-                try {
-                    stampImage = await pdfDoc.embedPng(logoImageBytes);
-                } catch (e) {
-                    stampImage = await pdfDoc.embedJpg(logoImageBytes);
-                }
-
-                // 4. تطبيق الأختام
-                const pages = pdfDoc.getPages();
-                for (const page of pages) {
-                    const { width, height } = page.getSize();
+                    // إنشاء زر تحميل خاص بهذا الملف
+                    const downloadLink = document.createElement('a');
+                    downloadLink.className = 'download-btn';
+                    downloadLink.href = blobUrl;
+                    downloadLink.download = newFileName;
+                    downloadLink.innerText = `📥 تنزيل: ${newFileName}`;
                     
-                    // أ. الختم المائي (الوسط - كبير وواضح ومقروء ما تحته)
-                    const centerScale = 0.5;
-                    const centerDims = stampImage.scale(centerScale);
-                    page.drawImage(stampImage, {
-                        x: (width - centerDims.width) / 2,
-                        y: (height - centerDims.height) / 2,
-                        width: centerDims.width,
-                        height: centerDims.height,
-                        opacity: 0.4, // زيادة الوضوح قليلاً مع الحفاظ على الشفافية
-                    });
-
-                    // ب. ختم التوثيق (أسفل اليسار - شفاف ليظهر النص تحته)
-                    const stampScale = 0.15;
-                    const stampDims = stampImage.scale(stampScale);
-                    const margin = 20;
-
-                    page.drawImage(stampImage, {
-                        x: margin, // في الزاوية اليسرى
-                        y: margin, // في الأسفل (عادة أفرغ من الأعلى)
-                        width: stampDims.width,
-                        height: stampDims.height,
-                        opacity: 0.75, // شفافية تسمح بقراءة النص الأسود من تحت الختم
-                    });
+                    downloadsContainer.appendChild(downloadLink);
                 }
 
-                // 5. الحفظ والتنزيل
-                const modifiedPdfBytes = await pdfDoc.save();
-                const blob = new Blob([modifiedPdfBytes], { type: 'application/pdf' });
-                const blobUrl = URL.createObjectURL(blob);
-
-                downloadLink.href = blobUrl;
-                const newFileName = file.name.replace(/\.[^/.]+$/, "") + "_signed.pdf";
-                downloadLink.download = newFileName;
-                
-                downloadLink.style.display = 'inline-block';
                 statusMsg.innerText = "✅ تم التحويل والتوقيع بنجاح!";
                 statusMsg.className = "status success";
 
