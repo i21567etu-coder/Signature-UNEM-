@@ -154,6 +154,81 @@
     </footer>
 
     <script>
+        const MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10MB - الحد الأقصى المطلوب لحجم أي ملف
+        const SAFE_TARGET_BYTES = MAX_SIZE_BYTES * 0.92; // هامش أمان بسيط تحت 10MB
+
+        // ---------------------------------------------------------------
+        // 1) ضغط الصور الكبيرة (10MB فأكثر) لتصبح أصغر من 10MB دون إفساد جودتها
+        //    يعمل فقط على الملفات التي تتجاوز الحجم المسموح، ولا يلمس الملفات الأصغر إطلاقاً
+        // ---------------------------------------------------------------
+        async function compressImageIfNeeded(file) {
+            if (file.size < MAX_SIZE_BYTES) {
+                // الملف بالفعل أصغر من 10MB: يُستخدم كما هو دون أي تعديل على جودته
+                return { bytes: new Uint8Array(await file.arrayBuffer()), isPng: file.type === 'image/png' };
+            }
+
+            const bitmap = await createImageBitmap(file);
+            let scale = 1;
+            let quality = 0.92;
+            let finalBlob = null;
+
+            // نحاول أولاً تقليل الجودة تدريجياً، وإن لم يكفِ نقلل الأبعاد قليلاً، بشكل متكرر
+            // حتى نصل لحجم أصغر من 10MB مع الحفاظ على أفضل جودة ممكنة
+            for (let attempt = 0; attempt < 14; attempt++) {
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+                canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+                const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+                finalBlob = blob;
+
+                if (blob.size < SAFE_TARGET_BYTES) break;
+
+                if (quality > 0.5) {
+                    quality -= 0.08; // نقلل الجودة أولاً (أقل ضرراً على الشكل العام)
+                } else {
+                    scale *= 0.85;   // إن لم تعد الجودة كافية، نقلل الأبعاد تدريجياً
+                    quality = 0.75;
+                }
+            }
+
+            return { bytes: new Uint8Array(await finalBlob.arrayBuffer()), isPng: false };
+        }
+
+        // ---------------------------------------------------------------
+        // 2) تجهيز الشعار كختم واضح لا يغطي الكتابة:
+        //    نزيل الخلفية البيضاء لشعار U.N.E.M ونجعلها شفافة تماماً، ونضبط شفافية
+        //    خطوط الشعار نفسه بحيث يظهر بوضوح كعلامة مائية حقيقية دون حجب النص تحته
+        // ---------------------------------------------------------------
+        async function prepareWatermarkLogo(logoArrayBuffer) {
+            const bitmap = await createImageBitmap(new Blob([logoArrayBuffer], { type: 'image/png' }));
+            const canvas = document.createElement('canvas');
+            canvas.width = bitmap.width;
+            canvas.height = bitmap.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(bitmap, 0, 0);
+
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imageData.data;
+            const WHITE_THRESHOLD = 235;   // أي بكسل أبيض تقريباً يصبح شفافاً بالكامل (إزالة الخلفية)
+            const WATERMARK_ALPHA = 100;   // شفافية خطوط الشعار نفسها (~39%) لتظهر بوضوح دون تغطية النص
+
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i], g = data[i + 1], b = data[i + 2];
+                if (r >= WHITE_THRESHOLD && g >= WHITE_THRESHOLD && b >= WHITE_THRESHOLD) {
+                    data[i + 3] = 0; // خلفية بيضاء -> شفافة كلياً
+                } else {
+                    data[i + 3] = WATERMARK_ALPHA; // رسم الشعار -> شفافية خفيفة تجعله ختماً واضحاً
+                }
+            }
+            ctx.putImageData(imageData, 0, 0);
+
+            const watermarkBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+            return new Uint8Array(await watermarkBlob.arrayBuffer());
+        }
+
         async function processFiles() {
             const fileInput = document.getElementById('fileInput');
             const statusMsg = document.getElementById('status-msg');
@@ -168,11 +243,14 @@
             statusMsg.className = "status loading";
 
             try {
-                // 1. جلب الشعار مرة واحدة لاستخدامه مع جميع الملفات
+                // 1. جلب الشعار مرة واحدة وتجهيزه كختم شفاف وواضح لاستخدامه مع جميع الملفات
                 const logoResponse = await fetch('logo.png');
                 if (!logoResponse.ok) throw new Error("لم يتم العثور على logo.png");
                 const logoImageBytes = await logoResponse.arrayBuffer();
+                const watermarkBytes = await prepareWatermarkLogo(logoImageBytes);
                 const { PDFDocument } = PDFLib;
+
+                let hadOversizedPdf = false;
 
                 // 2. المرور على كل ملف ومعالجته
                 for (let i = 0; i < files.length; i++) {
@@ -182,10 +260,12 @@
                     // التحقق من نوع الملف (صورة أم PDF)
                     if (file.type.startsWith('image/')) {
                         pdfDoc = await PDFDocument.create();
-                        const imageBytes = await file.arrayBuffer();
+
+                        // ضغط الصورة تلقائياً إن كان حجمها 10MB أو أكثر (دون المساس بالصور الأصغر)
+                        const { bytes: imageBytes, isPng } = await compressImageIfNeeded(file);
                         let embeddedImage;
 
-                        if (file.type === 'image/png') {
+                        if (isPng) {
                             embeddedImage = await pdfDoc.embedPng(imageBytes);
                         } else {
                             embeddedImage = await pdfDoc.embedJpg(imageBytes);
@@ -202,23 +282,19 @@
 
                     } else {
                         const pdfBytes = await file.arrayBuffer();
+                        if (file.size >= MAX_SIZE_BYTES) hadOversizedPdf = true;
                         pdfDoc = await PDFDocument.load(pdfBytes);
                     }
 
-                    // تحضير صورة الشعار
-                    let stampImage;
-                    try {
-                        stampImage = await pdfDoc.embedPng(logoImageBytes);
-                    } catch (e) {
-                        stampImage = await pdfDoc.embedJpg(logoImageBytes);
-                    }
+                    // تحضير صورة الختم (الشعار الشفاف) لهذا المستند
+                    const stampImage = await pdfDoc.embedPng(watermarkBytes);
 
                     // تطبيق الختم
                     const pages = pdfDoc.getPages();
                     for (const page of pages) {
                         const { width, height } = page.getSize();
                         
-                        // الختم المائي (الوسط - كبير، شفاف، ويسمح بقراءة النص)
+                        // الختم المائي (الوسط) - الخلفية شفافة والخطوط واضحة، بحيث يبقى النص مقروءاً بالكامل تحته
                         const centerScale = 0.5;
                         const centerDims = stampImage.scale(centerScale);
                         page.drawImage(stampImage, {
@@ -226,14 +302,13 @@
                             y: (height - centerDims.height) / 2,
                             width: centerDims.width,
                             height: centerDims.height,
-                            opacity: 0.3, // قيمة ممتازة لتكون الصورة شفافة والنص تحتها مقروءاً
                         });
                         
                         // ملاحظة: تم إزالة الختم الصغير الجانبي بناءً على طلبك
                     }
 
-                    // الحفظ والتنزيل لكل ملف
-                    const modifiedPdfBytes = await pdfDoc.save();
+                    // الحفظ والتنزيل لكل ملف (useObjectStreams مفعّل افتراضياً لتقليل الحجم قدر الإمكان)
+                    const modifiedPdfBytes = await pdfDoc.save({ useObjectStreams: true });
                     const blob = new Blob([modifiedPdfBytes], { type: 'application/pdf' });
                     const blobUrl = URL.createObjectURL(blob);
 
@@ -249,7 +324,9 @@
                     downloadsContainer.appendChild(downloadLink);
                 }
 
-                statusMsg.innerText = "✅ تم التحويل والتوقيع بنجاح!";
+                statusMsg.innerText = hadOversizedPdf
+                    ? "✅ تم التحويل والتوقيع بنجاح! (تنبيه: بعض ملفات PDF كانت أكبر من 10MB أصلاً، وقد لا يمكن تصغيرها أكثر دون إعادة معالجة محتواها الداخلي)"
+                    : "✅ تم التحويل والتوقيع بنجاح!";
                 statusMsg.className = "status success";
 
             } catch (err) {
